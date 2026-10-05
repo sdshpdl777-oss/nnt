@@ -83,7 +83,6 @@ def in_background(coro) -> None:
     task.add_done_callback(_background.discard)
 
 
-# ---------- Signals ----------
 
 async def learn_from_reply(user_id: int, conversation_id: str, image_url: str, image_prompt: str, user_message: str) -> None:
     if not user_message.strip():

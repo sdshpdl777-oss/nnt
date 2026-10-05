@@ -1,0 +1,38 @@
+databases:
+  - name: technofort-db
+    plan: free
+    databaseName: nntdb
+    user: technofort
+
+services:
+  - type: web
+    name: technofort-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: DB_HOST
+        fromDatabase: { name: technofort-db, property: host }
+      - key: DB_PORT
+        fromDatabase: { name: technofort-db, property: port }
+      - key: DB_NAME
+        fromDatabase: { name: technofort-db, property: database }
+      - key: DB_USER
+        fromDatabase: { name: technofort-db, property: user }
+      - key: DB_PASS
+        fromDatabase: { name: technofort-db, property: password }
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: JWT_SECRET
+        sync: false
