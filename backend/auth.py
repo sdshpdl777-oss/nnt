@@ -27,6 +27,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
+def issue_token(username: str) -> dict:
+    expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return {"access_token": create_access_token({"sub": username}, expires), "token_type": "bearer"}
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def get_current_user(

@@ -1,4 +1,4 @@
-import { API_URL, UnauthorizedError, authHeaders, errorDetail } from './conversations.js';
+import { apiFetch, errorDetail } from './conversations.js';
 
 export const CATEGORIES = [
   { key: 'master', label: 'Master files', hint: 'Source files — PSD, AI, PDF, ZIP, fonts, final exports.', accept: undefined },
@@ -8,12 +8,12 @@ export const CATEGORIES = [
 export const REFERENCE_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: { ...(options.json ? { 'Content-Type': 'application/json' } : {}), ...authHeaders(), ...options.headers },
-    body: options.json ? JSON.stringify(options.json) : options.body,
+  const { json, ...rest } = options;
+  const response = await apiFetch(path, {
+    ...rest,
+    headers: { ...(json ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
+    body: json ? JSON.stringify(json) : options.body,
   });
-  if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok) throw new Error(await errorDetail(response));
   return response.status === 204 ? null : response.json();
 }
@@ -26,19 +26,19 @@ export const deleteClient = id => request(`/api/clients/${id}`, { method: 'DELET
 export const setFileKind = (clientId, fileId, kind) => request(`/api/clients/${clientId}/files/${fileId}`, { method: 'PATCH', json: { kind } });
 export const deleteClientFile = (clientId, fileId) => request(`/api/clients/${clientId}/files/${fileId}`, { method: 'DELETE' });
 export const listReferences = () => request('/api/references');
-export const addReferenceFromUrl = url => request('/api/references/from-url', { method: 'POST', json: { url } });
+export const addReferenceFromUrl = url => request('/api/references/from-url', { method: 'POST', timeout: 180_000, json: { url } });
 export const deleteReference = id => request(`/api/references/${id}`, { method: 'DELETE' });
 
 export function uploadReference(file) {
   const form = new FormData();
   form.append('file', file);
-  return request('/api/references', { method: 'POST', body: form });
+  return request('/api/references', { method: 'POST', body: form, timeout: 180_000 });
 }
 
 export function uploadClientFile(clientId, category, file) {
   const form = new FormData();
   form.append('file', file);
-  return request(`/api/clients/${clientId}/files?category=${category}`, { method: 'POST', body: form });
+  return request(`/api/clients/${clientId}/files?category=${category}`, { method: 'POST', body: form, timeout: 300_000 });
 }
 
 const PREVIEWABLE = /\.(png|jpe?g|webp|gif|svg|avif|bmp)$/i;
@@ -61,6 +61,6 @@ export function extension(name) {
   return m ? m[1].toUpperCase() : 'FILE';
 }
 
-export const extractBrandKit = (clientId, website) => request(`/api/clients/${clientId}/brand-kit/extract`, { method: 'POST', json: { website: website || null } });
+export const extractBrandKit = (clientId, website) => request(`/api/clients/${clientId}/brand-kit/extract`, { method: 'POST', timeout: 300_000, json: { website: website || null } });
 export const saveBrandKit = (clientId, data, website) => request(`/api/clients/${clientId}/brand-kit`, { method: 'PUT', json: { data, website: website || null } });
 export const deleteBrandKit = clientId => request(`/api/clients/${clientId}/brand-kit`, { method: 'DELETE' });

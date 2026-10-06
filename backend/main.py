@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Literal
 
 import cloudinary
@@ -114,11 +113,7 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = auth.create_access_token(
-        data={"sub": new_user.username}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return auth.issue_token(new_user.username)
 
 @app.post("/api/auth/login", response_model=schemas.Token)
 def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
@@ -130,11 +125,12 @@ def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = auth.create_access_token(
-        data={"sub": db_user.username}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return auth.issue_token(db_user.username)
+
+# Swaps a still-valid token for a fresh one, so active sessions never hit the expiry
+@app.post("/api/auth/refresh", response_model=schemas.Token)
+def refresh_token(user: models.User = Depends(auth.get_current_user)):
+    return auth.issue_token(user.username)
 
 @app.post("/api/uploads/image", response_model=schemas.UploadedImage)
 async def upload_reference_image(file: UploadFile = File(...), user: models.User = Depends(auth.get_current_user)):
@@ -198,7 +194,7 @@ async def chat_endpoint(request: schemas.ChatRequest, user: models.User = Depend
                     if isinstance(msg.content, str) and msg.content:
                         token = msg.content
                         if streamed_step is not None and meta["langgraph_step"] != streamed_step:
-                            token = "\n\n" + token  # text from a later model call (after a search)
+                            token = "\n\n" + token  
                         streamed_step = meta["langgraph_step"]
                         yield sse({"type": "token", "content": token})
                     continue

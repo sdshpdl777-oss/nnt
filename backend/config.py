@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DB_PORT: str = "5432"
     JWT_SECRET: str = ""
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 720  # the frontend refreshes the token before it runs out
 
     OPENAI_API_KEY: str = ""
     TAVILY_API_KEY: str = ""

@@ -189,6 +189,7 @@ h1, h2, h3, .greeting { font-family: 'Poppins', 'Montserrat', sans-serif; }
 .field:focus { border-color: var(--accent); }
 
 .form-error { color: var(--danger); font-size: 0.85rem; text-align: left; }
+.form-notice { margin: -0.75rem 0 1rem; color: var(--text-2); font-size: 0.9rem; }
 
 .auth-switch { margin-top: 1.25rem; font-size: 0.875rem; color: var(--text-2); }
 .link-btn { font-weight: 600; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }

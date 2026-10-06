@@ -4,7 +4,9 @@ import { PanelLeft, SquarePen, ArrowRight } from 'lucide-react';
 import Sidebar from './components/Sidebar.jsx';
 import Chat from './components/Chat.jsx';
 import { ClientsPage, ClientPage, ReferencesPage } from './components/Clients.jsx';
-import { API_URL, useConversations } from './conversations.js';
+import { API_URL, REQUEST_TIMEOUT_MS, UnauthorizedError, ensureFreshToken, errorDetail, timeoutMessage, useConversations } from './conversations.js';
+
+const EXPIRED_KEY = 'nnt.sessionExpired';
 
 // --- Public Components ---
 
@@ -55,6 +57,11 @@ const Join = ({ setAuth }) => {
   const [formData, setFormData] = useState({ username: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [notice] = useState(() => {
+    const expired = sessionStorage.getItem(EXPIRED_KEY);
+    sessionStorage.removeItem(EXPIRED_KEY);
+    return expired ? 'Your session expired. Please sign in again.' : '';
+  });
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -71,20 +78,20 @@ const Join = ({ setAuth }) => {
       const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
+      if (!response.ok) throw new Error(await errorDetail(response));
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Authentication failed');
-      }
 
       localStorage.setItem('token', data.access_token);
       setAuth(true);
       navigate('/chat');
     } catch (err) {
-      setError(err.message);
+      if (err.name === 'TimeoutError') setError(timeoutMessage());
+      else if (err instanceof TypeError) setError('Could not reach the server. Check your connection and try again.');
+      else setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -95,6 +102,7 @@ const Join = ({ setAuth }) => {
       <div className="auth-card">
         <FullLogo />
         <h2>{isLogin ? 'Welcome back' : 'Create your account'}</h2>
+        {notice && !error && <p className="form-notice">{notice}</p>}
         <form onSubmit={handleSubmit} className="auth-form">
           <input className="field" type="text" placeholder="Username" autoComplete="username" value={formData.username} onChange={e => setFormData({ ...formData, username: e.target.value })} required />
           {!isLogin && <input className="field" type="email" placeholder="Email address" autoComplete="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} required />}
@@ -160,7 +168,30 @@ const AppShell = ({ setAuth }) => {
     navigate('/');
   }, [setAuth, navigate]);
 
-  const chat = useConversations({ onUnauthorized: handleLogout });
+  // A 401 or a token past its expiry: sign out and explain why on the sign-in page
+  const handleExpired = useCallback(() => {
+    sessionStorage.setItem(EXPIRED_KEY, '1');
+    localStorage.removeItem('token');
+    setAuth(false);
+    navigate('/join');
+  }, [setAuth, navigate]);
+
+  // Keep the token renewed while the app is open; sign out once it has expired (e.g. after the laptop slept)
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== 'visible') return;
+      ensureFreshToken().catch(err => { if (err instanceof UnauthorizedError) handleExpired(); });
+    };
+    check();
+    const timer = setInterval(check, 60_000);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [handleExpired]);
+
+  const chat = useConversations({ onUnauthorized: handleExpired });
   const { pathname } = useLocation();
   const activeId = pathname.startsWith('/chat/') ? pathname.split('/')[2] : null;
 
@@ -203,11 +234,11 @@ const AppShell = ({ setAuth }) => {
 
         <div className="main-body">
           <Routes>
-            <Route path="/chat" element={<ChatRoute {...chat} onUnauthorized={handleLogout} />} />
-            <Route path="/chat/:chatId" element={<ChatRoute {...chat} onUnauthorized={handleLogout} />} />
-            <Route path="/dashboard/clients" element={<ClientsPage onUnauthorized={handleLogout} />} />
-            <Route path="/dashboard/clients/:clientId" element={<ClientPage onUnauthorized={handleLogout} />} />
-            <Route path="/dashboard/references" element={<ReferencesPage onUnauthorized={handleLogout} />} />
+            <Route path="/chat" element={<ChatRoute {...chat} onUnauthorized={handleExpired} />} />
+            <Route path="/chat/:chatId" element={<ChatRoute {...chat} onUnauthorized={handleExpired} />} />
+            <Route path="/dashboard/clients" element={<ClientsPage onUnauthorized={handleExpired} />} />
+            <Route path="/dashboard/clients/:clientId" element={<ClientPage onUnauthorized={handleExpired} />} />
+            <Route path="/dashboard/references" element={<ReferencesPage onUnauthorized={handleExpired} />} />
             <Route path="/dashboard/assets" element={<PlaceholderPage title="Assets" text="Your gallery of generated images, organized by client and project." />} />
             <Route path="*" element={<Navigate to="/chat" replace />} />
           </Routes>

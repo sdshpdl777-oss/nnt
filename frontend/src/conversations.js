@@ -6,9 +6,79 @@ const STORAGE_KEY = 'nnt.conversations';
 
 export class UnauthorizedError extends Error {}
 
+// Render's free tier sleeps when idle and takes up to ~a minute to wake, so timeouts are generous
+export const REQUEST_TIMEOUT_MS = 90_000;
+const REFRESH_WITHIN_MS = 10 * 60_000; // renew the token once it has less than this left
+
+export function timeoutMessage() {
+  return 'The server took too long to respond. It may be waking up from sleep, so try again in a moment.';
+}
+
 export function authHeaders() {
   const token = localStorage.getItem('token');
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// Milliseconds since epoch when the stored token expires; 0 when missing or unreadable
+export function tokenExpiry() {
+  try {
+    const token = localStorage.getItem('token');
+    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000;
+  } catch {
+    return 0;
+  }
+}
+
+let refreshing = null;
+
+// Renews the token if it is close to expiring. Throws UnauthorizedError once it has already expired.
+export function ensureFreshToken() {
+  const left = tokenExpiry() - Date.now();
+  if (left <= 0) return Promise.reject(new UnauthorizedError());
+  if (left > REFRESH_WITHIN_MS) return Promise.resolve();
+  // Concurrent requests share one refresh call
+  refreshing ??= fetch(`${API_URL}/api/auth/refresh`, {
+    method: 'POST',
+    headers: authHeaders(),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+    .then(async response => {
+      if (response.status === 401) throw new UnauthorizedError();
+      if (response.ok) localStorage.setItem('token', (await response.json()).access_token);
+      // Other failures (network, cold start) are ignored; the current token is still valid
+    })
+    .catch(err => {
+      if (err instanceof UnauthorizedError) throw err;
+    })
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
+// fetch() against the API with a fresh token, a timeout, and 401 mapped to UnauthorizedError.
+// `timeout` only bounds the wait for the response headers, so streamed bodies can run longer.
+export async function apiFetch(path, { timeout = REQUEST_TIMEOUT_MS, signal, headers, ...options } = {}) {
+  await ensureFreshToken();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException(timeoutMessage(), 'TimeoutError')), timeout);
+  const onAbort = () => controller.abort(signal.reason);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  try {
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: { ...authHeaders(), ...headers },
+      signal: controller.signal,
+    });
+    if (response.status === 401) throw new UnauthorizedError();
+    return response;
+  } catch (err) {
+    if (controller.signal.reason?.name === 'TimeoutError') throw new Error(timeoutMessage());
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function errorDetail(response) {
@@ -23,8 +93,7 @@ export async function errorDetail(response) {
 
 // What an @ in the composer can point at: { clients: [...], references: [...] }
 export async function fetchMentions(query, kind, signal) {
-  const response = await fetch(`${API_URL}/api/mentions?q=${encodeURIComponent(query)}&kind=${kind}`, { headers: authHeaders(), signal });
-  if (response.status === 401) throw new UnauthorizedError();
+  const response = await apiFetch(`/api/mentions?q=${encodeURIComponent(query)}&kind=${kind}`, { signal });
   if (!response.ok) throw new Error(await errorDetail(response));
   return response.json();
 }
@@ -33,8 +102,7 @@ export async function fetchMentions(query, kind, signal) {
 export async function uploadImage(file) {
   const form = new FormData();
   form.append('file', file);
-  const response = await fetch(`${API_URL}/api/uploads/image`, { method: 'POST', headers: authHeaders(), body: form });
-  if (response.status === 401) throw new UnauthorizedError();
+  const response = await apiFetch('/api/uploads/image', { method: 'POST', body: form, timeout: 180_000 });
   if (!response.ok) throw new Error(await errorDetail(response));
   return response.json();
 }
@@ -105,13 +173,12 @@ export function useConversations({ onUnauthorized } = {}) {
       setStreamingId(id);
 
       try {
-        const response = await fetch(`${API_URL}/api/chat`, {
+        const response = await apiFetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text, conversation_id: id, images: images.map(i => ({ url: i.url, kind: i.kind || 'reference' })), mentions }),
           signal: controller.signal,
         });
-        if (response.status === 401) throw new UnauthorizedError();
         if (!response.ok || !response.body) throw new Error(await errorDetail(response));
 
         const reader = response.body.getReader();
@@ -164,7 +231,7 @@ export function useConversations({ onUnauthorized } = {}) {
           updateLastMessage(id, { error: 'Your session expired. Please sign in again.' });
           onUnauthorized?.();
         } else if (err instanceof TypeError) {
-          updateLastMessage(id, { error: 'Could not reach the AI server. Check that the backend is running.' });
+          updateLastMessage(id, { error: 'Could not reach the AI server. Check your connection and try again.' });
         } else {
           updateLastMessage(id, { error: err.message });
         }
@@ -182,7 +249,7 @@ export function useConversations({ onUnauthorized } = {}) {
   const deleteConversation = useCallback(id => {
     setConversations(prev => prev.filter(c => c.id !== id));
     // Also drop the server-side history and its long-term memories
-    fetch(`${API_URL}/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() }).catch(() => {});
+    apiFetch(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
   }, []);
 
   return { conversations, streamingId, sendMessage, stop, deleteConversation, newId };
