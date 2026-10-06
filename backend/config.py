@@ -1,5 +1,5 @@
 from urllib.parse import quote_plus
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
 class Settings(BaseSettings):
     DB_NAME: str = "nntdb"
@@ -71,5 +71,11 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+
+    # backend/.env wins over shell variables, so a stray `export OPENAI_API_KEY` in ~/.zshrc
+    # can't silently replace the project's keys. Deploys without a .env still use real env vars.
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
+        return init_settings, dotenv_settings, env_settings, file_secret_settings
 
 settings = Settings()
